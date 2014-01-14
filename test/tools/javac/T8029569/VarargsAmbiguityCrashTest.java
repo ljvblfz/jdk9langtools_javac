@@ -21,15 +21,21 @@
  * questions.
  */
 
-/**
+/*
  * @test
- * @bug 8006728
- * @summary temporarily workaround jtreg problems for doclint tests in othervm
+ * @bug 8029569
+ * @summary internal javac cast exception when resolving varargs ambiguity
+ * @compile/fail/ref=VarargsAmbiguityCrashTest.out -XDrawDiagnostics VarargsAmbiguityCrashTest.java
  */
 
-// dummy test/class to be compiled before other tests in this directory
-// see JDK-8006730
-public class AAA {
-    public static void main(String... args) { }
-}
+public class VarargsAmbiguityCrashTest {
+    void m1() {
+        m2(null, new Exception());
+    }
 
+    void m2(Long l) {}
+
+    void m2(Exception... exception) {}
+
+    void m2(Long l, Exception... exception) {}
+}

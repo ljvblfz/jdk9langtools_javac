@@ -21,15 +21,28 @@
  * questions.
  */
 
-/**
+/*
  * @test
- * @bug 8006728
- * @summary temporarily workaround jtreg problems for doclint tests in othervm
+ * @bug 8029558
+ * @summary VerifyError lambda body is parenthesized generic value
+ * @author  Robert Field
+ * @run main LambdaParenGeneric
  */
 
-// dummy test/class to be compiled before other tests in this directory
-// see JDK-8006730
-public class AAA {
-    public static void main(String... args) { }
-}
+public class LambdaParenGeneric {
 
+    @FunctionalInterface
+    public interface FI {
+        Integer apply();
+    }
+
+    public static class Val<A> {
+        A value;
+        Val(A v) { value = v; }
+    }
+
+    public static void main(String[] args) {
+        FI inc = () -> (new Val<Integer>(77).value);
+        System.out.println(inc.apply());
+    }
+}
