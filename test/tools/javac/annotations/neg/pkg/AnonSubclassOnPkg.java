@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,19 +21,8 @@
  * questions.
  */
 
-/*
- * @test
- * @bug 5044157
- * @summary please accept -source 5 and -target 5
- * @author Peter von der Ahé
- *
- * @compile -source 5 -target 5 -encoding iso-8859-1 Source5.java
- * @run main Source5
- */
+package pkg;
 
-public enum Source5 {
-    JDK5;
-    public static void main(String[] args) {
-        System.out.println("Hello, world!");
-    }
+@interface AnonSubclassOnPkg {
+    String value();
 }
