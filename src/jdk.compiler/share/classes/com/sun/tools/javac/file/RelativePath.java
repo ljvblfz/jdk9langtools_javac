@@ -25,6 +25,7 @@
 
 package com.sun.tools.javac.file;
 
+import java.io.File;
 import java.nio.file.FileSystems;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;

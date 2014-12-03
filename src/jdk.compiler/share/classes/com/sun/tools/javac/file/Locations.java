@@ -27,6 +27,7 @@ package com.sun.tools.javac.file;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
@@ -45,6 +46,7 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipFile;
 
@@ -99,6 +101,12 @@ public class Locations {
      */
     private boolean warn;
 
+    // Used by Locations(for now) to indicate that the PLATFORM_CLASS_PATH
+    // should use the jrt: file system.
+    // When Locations has been converted to use java.nio.file.Path,
+    // Locations can use Paths.get(URI.create("jrt:"))
+    static final Path JRT_MARKER_FILE = Paths.get("JRT_MARKER_FILE");
+
     public Locations() {
         initHandlers();
     }
@@ -118,12 +126,6 @@ public class Locations {
         BootClassPathLocationHandler h
                 = (BootClassPathLocationHandler) getHandler(PLATFORM_CLASS_PATH);
         return h.isDefault();
-    }
-
-    boolean isDefaultBootClassPathRtJar(Path file) {
-        BootClassPathLocationHandler h
-                = (BootClassPathLocationHandler) getHandler(PLATFORM_CLASS_PATH);
-        return h.isDefaultRtJar(file);
     }
 
     public Collection<Path> userClassPath() {
@@ -279,7 +281,7 @@ public class Locations {
 
             if (fsInfo.isFile(file)) {
                 /* File is an ordinary file. */
-                if (!isArchive(file)) {
+                if (!isArchive(file) && !file.getFileName().toString().endsWith(".jimage")) {
                     /* Not a recognized extension; open it to see if
                      it looks like a valid zip file. */
                     try {
@@ -305,7 +307,7 @@ public class Locations {
             super.add(file);
             canonicalValues.add(canonFile);
 
-            if (expandJarClassPaths && fsInfo.isFile(file)) {
+            if (expandJarClassPaths && fsInfo.isFile(file) && !file.getFileName().toString().endsWith(".jimage")) {
                 addJarClassPath(file, warn);
             }
         }
@@ -539,15 +541,9 @@ public class Locations {
         final Map<Option, String> optionValues = new EnumMap<>(Option.class);
 
         /**
-         * rt.jar as found on the default bootclasspath. If the user specified a bootclasspath, null
-         * is used.
+         * Is the bootclasspath the default?
          */
-        private Path defaultBootClassPathRtJar = null;
-
-        /**
-         * Is bootclasspath the default?
-         */
-        private boolean isDefaultBootClassPath;
+        private boolean isDefault;
 
         BootClassPathLocationHandler() {
             super(StandardLocation.PLATFORM_CLASS_PATH,
@@ -560,12 +556,7 @@ public class Locations {
 
         boolean isDefault() {
             lazy();
-            return isDefaultBootClassPath;
-        }
-
-        boolean isDefaultRtJar(Path file) {
-            lazy();
-            return file.equals(defaultBootClassPathRtJar);
+            return isDefault;
         }
 
         @Override
@@ -610,16 +601,16 @@ public class Locations {
             if (files == null) {
                 searchPath = null;  // reset to "uninitialized"
             } else {
-                defaultBootClassPathRtJar = null;
-                isDefaultBootClassPath = false;
+                isDefault = false;
                 SearchPath p = new SearchPath().addFiles(files, false);
                 searchPath = Collections.unmodifiableCollection(p);
                 optionValues.clear();
             }
         }
 
-        SearchPath computePath() {
-            defaultBootClassPathRtJar = null;
+        SearchPath computePath() throws IOException {
+            String java_home = System.getProperty("java.home");
+
             SearchPath path = new SearchPath();
 
             String bootclasspathOpt = optionValues.get(BOOTCLASSPATH);
@@ -639,13 +630,13 @@ public class Locations {
                 path.addFiles(bootclasspathOpt);
             } else {
                 // Standard system classes for this compiler's release.
-                String files = System.getProperty("sun.boot.class.path");
-                path.addFiles(files, false);
-                Path rt_jar = Paths.get("rt.jar");
-                for (Path file : getPathEntries(files)) {
-                    if (file.getFileName().equals(rt_jar)) {
-                        defaultBootClassPathRtJar = file;
-                    }
+                Collection<Path> systemClasses = systemClasses(java_home);
+                if (systemClasses != null) {
+                    path.addFiles(systemClasses, false);
+                } else {
+                    // fallback to the value of sun.boot.class.path
+                    String files = System.getProperty("sun.boot.class.path");
+                    path.addFiles(files, false);
                 }
             }
 
@@ -657,20 +648,67 @@ public class Locations {
             if (extdirsOpt != null) {
                 path.addDirectories(extdirsOpt);
             } else {
+                // Add lib/jfxrt.jar to the search path
+               Path jfxrt = Paths.get(java_home, "lib", "jfxrt.jar");
+                if (Files.exists(jfxrt)) {
+                    path.addFile(jfxrt, false);
+                }
                 path.addDirectories(System.getProperty("java.ext.dirs"), false);
             }
 
-            isDefaultBootClassPath
-                    = (xbootclasspathPrependOpt == null)
+            isDefault =
+                       (xbootclasspathPrependOpt == null)
                     && (bootclasspathOpt == null)
                     && (xbootclasspathAppendOpt == null);
 
             return path;
         }
 
+        /**
+         * Return a collection of files containing system classes.
+         * Returns {@code null} if not running on a modular image.
+         *
+         * @throws UncheckedIOException if an I/O errors occurs
+         */
+        private Collection<Path> systemClasses(String java_home) throws IOException {
+            // Return .jimage files if available
+            Path libModules = Paths.get(java_home, "lib", "modules");
+            if (Files.exists(libModules)) {
+                try (Stream<Path> files = Files.list(libModules)) {
+                    boolean haveJImageFiles =
+                            files.anyMatch(f -> f.getFileName().toString().endsWith(".jimage"));
+                    if (haveJImageFiles) {
+                        return Collections.singleton(JRT_MARKER_FILE);
+                    }
+                }
+            }
+
+            // Temporary: if no .jimage files, return individual modules
+            if (Files.exists(libModules.resolve("java.base"))) {
+                return Files.list(libModules)
+                            .map(d -> d.resolve("classes"))
+                            .collect(Collectors.toList());
+            }
+
+            // Exploded module image
+            Path modules = Paths.get(java_home, "modules");
+            if (Files.isDirectory(modules.resolve("java.base"))) {
+                return Files.list(modules)
+                            .collect(Collectors.toList());
+            }
+
+            // not a modular image that we know about
+            return null;
+        }
+
         private void lazy() {
             if (searchPath == null) {
+                try {
                 searchPath = Collections.unmodifiableCollection(computePath());
+                } catch (IOException e) {
+                    // TODO: need better handling here, e.g. javac Abort?
+                    throw new UncheckedIOException(e);
+                }
             }
         }
     }
